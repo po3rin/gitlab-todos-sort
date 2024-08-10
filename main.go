@@ -10,16 +10,17 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"text/tabwriter"
 	"time"
 )
 
 type ToDo struct {
-	Target_URL string    `json:"target_url"`
-	CreatedAt  time.Time `json:"created_at"`
-	State      string    `json:"state"`
-	Body       string    `json:"body"`
-	Target     Target    `json:"target"`
-	Project    Project   `json:"project"`
+	TargetURL string    `json:"target_url"`
+	CreatedAt time.Time `json:"created_at"`
+	State     string    `json:"state"`
+	Body      string    `json:"body"`
+	Target    Target    `json:"target"`
+	Project   Project   `json:"project"`
 
 	// additional meta data
 	Score float64
@@ -31,6 +32,11 @@ type Target struct {
 	Description string `json:"description"`
 	State       string `json:"state"`
 	Draft       bool   `json:"draft"`
+	Autor       Autor  `json:"author"`
+}
+
+type Autor struct {
+	Username string `json:"username"`
 }
 
 type Project struct {
@@ -178,6 +184,9 @@ func addCreatedAtScore(todos []ToDo) {
 func addUserNamePosScore(todos []ToDo, userName string) {
 	for i := range todos {
 		userNamePos := strings.LastIndex(todos[i].Body, fmt.Sprintf("@%s", userName))
+		if userNamePos == -1 {
+			continue
+		}
 		userNameOrder := float64(strings.Count(string([]rune(todos[i].Body)[:userNamePos]), "@"))
 		userNum := float64(strings.Count(todos[i].Body, "@"))
 		todos[i].Score += (30 * (1 - (userNameOrder / userNum))) + (50 / userNum)
@@ -269,7 +278,12 @@ func main() {
 		log.Fatal(err)
 	}
 
+	sortByScore(todos)
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 1, 1, ' ', tabwriter.TabIndent)
+	w.Write([]byte("url\tscore\n"))
 	for _, todo := range todos {
-		fmt.Println(todo.Target_URL)
+		fmt.Fprintf(w, "%s\t%v\n", todo.TargetURL, todo.Score)
 	}
+	w.Flush()
 }
