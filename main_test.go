@@ -9,27 +9,27 @@ func TestAddUserNamePosScore(t *testing.T) {
 	tests := []struct {
 		name  string
 		input []ToDo
-		want  []ToDo
+		want  map[int]float64
 	}{
 		{
 			name: "user order",
 			input: []ToDo{
 				{
 					Body: "@hiromu @tarou @jiro @saburo @shiro @gorou @rokuro @nanaro @hatiro @kuro",
+					Target: Target{
+						IID: 1,
+					},
 				},
 				{
 					Body: "@tarou @jiro @saburo @hiromu @shiro @gorou @rokuro @nanaro @hatiro @kuro",
+					Target: Target{
+						IID: 2,
+					},
 				},
 			},
-			want: []ToDo{
-				{
-					Body:  "@hiromu @tarou @jiro @saburo @shiro @gorou @rokuro @nanaro @hatiro @kuro",
-					Score: 35,
-				},
-				{
-					Body:  "@tarou @jiro @saburo @hiromu @shiro @gorou @rokuro @nanaro @hatiro @kuro",
-					Score: 26,
-				},
+			want: map[int]float64{
+				1: 35,
+				2: 26,
 			},
 		},
 		{
@@ -37,42 +37,42 @@ func TestAddUserNamePosScore(t *testing.T) {
 			input: []ToDo{
 				{
 					Body: "@tarou @jiro @saburo @hiromu @shiro @gorou @rokuro @nanaro @hatiro @kuro",
+					Target: Target{
+						IID: 1,
+					},
 				},
 				{
 					Body: "@tarou @jiro @saburo @hiromu @shiro @gorou @rokuro @nanaro",
+					Target: Target{
+						IID: 2,
+					},
 				},
 				{
 					Body: "@saburo @hiromu @shiro @gorou",
+					Target: Target{
+						IID: 3,
+					},
 				},
 				{
 					Body: "@hiromu",
+					Target: Target{
+						IID: 4,
+					},
 				},
 			},
-			want: []ToDo{
-				{
-					Body:  "@tarou @jiro @saburo @hiromu @shiro @gorou @rokuro @nanaro @hatiro @kuro",
-					Score: 26,
-				},
-				{
-					Body:  "@tarou @jiro @saburo @hiromu @shiro @gorou @rokuro @nanaro",
-					Score: 25,
-				},
-				{
-					Body:  "@saburo @hiromu @shiro @gorou",
-					Score: 35,
-				},
-				{
-					Body:  "@hiromu",
-					Score: 80,
-				},
+			want: map[int]float64{
+				1: 26,
+				2: 25,
+				3: 35,
+				4: 80,
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			addUserNamePosScore(tt.input, "hiromu")
-			if !reflect.DeepEqual(tt.input, tt.want) {
+			got := userNamePosScore(tt.input, "hiromu")
+			if !reflect.DeepEqual(tt.want, got) {
 				t.Errorf("\ngot : %v\nwant: %v", tt.input, tt.want)
 			}
 		})

@@ -1,12 +1,10 @@
 package main
 
 import (
-	"encoding/json"
+	"flag"
 	"fmt"
-	"io"
 	"log"
 	"math"
-	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -54,91 +52,6 @@ type Diff struct {
 	NewPath string
 }
 
-type GitLabClient struct {
-	host        string
-	accessToken string
-}
-
-func NewGitLabClient(host, accessToken string) *GitLabClient {
-	return &GitLabClient{
-		host:        host,
-		accessToken: accessToken,
-	}
-}
-
-func (g *GitLabClient) todos() ([]ToDo, error) {
-	res, err := http.Get(fmt.Sprintf("https://%s/api/v4/todos?access_token=%s", g.host, g.accessToken))
-	if err != nil {
-		return nil, fmt.Errorf("failed to get response from GitLab API: %w", err)
-	}
-	defer res.Body.Close()
-
-	body, err := io.ReadAll(res.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response body from GitLab API: %w", err)
-	}
-
-	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("failed to get response from GitLab API: %s", body)
-	}
-
-	var todos []ToDo
-	if err := json.Unmarshal(body, &todos); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response body from GitLab API: %w", err)
-	}
-
-	return todos, nil
-}
-
-func (g *GitLabClient) commits(id int) ([]Commit, error) {
-	targetDate := time.Now().AddDate(0, 0, -365).Format("2006-01-02T15:04:05Z")
-	res, err := http.Get(fmt.Sprintf("https://%s/api/v4/projects/%v/repository/commits?since=%s&access_token=%s", g.host, id, targetDate, g.accessToken))
-	if err != nil {
-		return nil, fmt.Errorf("failed to get commits in project %v from GitLab API: %w", id, err)
-	}
-	defer res.Body.Close()
-
-	body, err := io.ReadAll(res.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response body from GitLab API: %w", err)
-	}
-
-	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("get unexpected status in project %v from GitLab API: %s", id, string(body))
-	}
-
-	var commits []Commit
-	if err := json.Unmarshal(body, &commits); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response body from GitLab API: %w", err)
-	}
-
-	return commits, nil
-}
-
-func (g *GitLabClient) diffs(id int, iid string) ([]Diff, error) {
-	res, err := http.Get(fmt.Sprintf("https://%s/api/v4/projects/%v/merge_requests/%s/diffs?access_token=%s", g.host, id, iid, g.accessToken))
-	if err != nil {
-		return nil, fmt.Errorf("failed to get diffs in project %v from GitLab API: %w", id, err)
-	}
-	defer res.Body.Close()
-
-	body, err := io.ReadAll(res.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response body from GitLab API: %w", err)
-	}
-
-	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("get unexpected status in project %v from GitLab API: %s", id, string(body))
-	}
-
-	var diffs []Diff
-	if err := json.Unmarshal(body, &diffs); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response body from GitLab API: %w", err)
-	}
-
-	return diffs, nil
-}
-
 func onlyOpenState(todos []ToDo) []ToDo {
 	openTodos := []ToDo{}
 	for _, todo := range todos {
@@ -161,61 +74,76 @@ func rmDraft(todos []ToDo) []ToDo {
 
 var urgentKeywords = []string{"URGENT", "EMERGENCY", "緊急", "重要", "急ぎ"}
 
-func addUrgentScore(todos []ToDo) {
-	for i := range todos {
+func urgentScore(todos []ToDo) map[int]float64 {
+	result := make(map[int]float64)
+	for _, t := range todos {
 		for _, keyword := range urgentKeywords {
-			if strings.Contains(todos[i].Body, keyword) || strings.Contains(todos[i].Target.Title, keyword) {
-				todos[i].Score += 1000
+			if strings.Contains(t.Body, keyword) || strings.Contains(t.Target.Title, keyword) {
+				result[t.Target.IID] = 1000
 			}
 		}
 	}
+	return result
 }
 
-func addCreatedAtScore(todos []ToDo) {
-	for i := range todos {
-		score := math.Exp(time.Since(todos[i].CreatedAt).Hours())
+func createdAtScore(todos []ToDo) map[int]float64 {
+	result := make(map[int]float64)
+	for _, t := range todos {
+		score := math.Exp(time.Since(t.CreatedAt).Hours())
 		if score > 300 {
 			score = 300
 		}
-		todos[i].Score += score
+		result[t.Target.IID] = score
 	}
+	return result
 }
 
-func addUserNamePosScore(todos []ToDo, userName string) {
-	for i := range todos {
-		userNamePos := strings.LastIndex(todos[i].Body, fmt.Sprintf("@%s", userName))
+func userNamePosScore(todos []ToDo, userName string) map[int]float64 {
+	result := make(map[int]float64)
+	for _, t := range todos {
+		userNamePos := strings.LastIndex(t.Body, fmt.Sprintf("@%s", userName))
 		if userNamePos == -1 {
 			continue
 		}
-		userNameOrder := float64(strings.Count(string([]rune(todos[i].Body)[:userNamePos]), "@"))
-		userNum := float64(strings.Count(todos[i].Body, "@"))
-		todos[i].Score += (30 * (1 - (userNameOrder / userNum))) + (50 / userNum)
+		userNameOrder := float64(strings.Count(string([]rune(t.Body)[:userNamePos]), "@"))
+		userNum := float64(strings.Count(t.Body, "@"))
+		result[t.Target.IID] = (30 * (1 - (userNameOrder / userNum))) + (50 / userNum)
 	}
+	return result
 }
 
-func addCommitScore(gitlabClient *GitLabClient, userName string, todos []ToDo) error {
-	for i := range todos {
-		commits, err := gitlabClient.commits(todos[i].Project.ID)
-		if err != nil {
-			return fmt.Errorf("failed to get commits: %w", err)
-		}
-		var commitiByUserNum float64
-		for _, commit := range commits {
-			if strings.Contains(commit.CommitterEmail, userName) {
-				commitiByUserNum += 1
+func commitScore(gitlabClient *GitLabClient, userName string, todos []ToDo) (map[int]float64, error) {
+	result := make(map[int]float64)
+	ProjectScoreMap := make(map[int]float64)
+	for _, t := range todos {
+		score, ok := ProjectScoreMap[t.Project.ID]
+		if !ok {
+			commits, err := gitlabClient.commits(t.Project.ID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get commits: %w", err)
 			}
+
+			var commitiByUserNum float64
+			for _, commit := range commits {
+				if strings.Contains(commit.CommitterEmail, userName) {
+					commitiByUserNum += 1
+				}
+			}
+
+			commitsNum := float64(len(commits))
+			score = 100 * commitiByUserNum / commitsNum
 		}
-		commitsNum := float64(len(commits))
-		todos[i].Score += 100 * commitiByUserNum / commitsNum
+		result[t.Target.IID] = score
 	}
-	return nil
+	return result, nil
 }
 
-func addDiffScore(gitlabClient *GitLabClient, todos []ToDo, priorityFileExt []string) error {
-	for i := range todos {
-		diffs, err := gitlabClient.diffs(todos[i].Project.ID, fmt.Sprintf("%d", todos[i].Target.IID))
+func diffScore(gitlabClient *GitLabClient, todos []ToDo, priorityFileExt []string) (map[int]float64, error) {
+	result := make(map[int]float64)
+	for _, t := range todos {
+		diffs, err := gitlabClient.diffs(t.Project.ID, fmt.Sprintf("%d", t.Target.IID))
 		if err != nil {
-			return fmt.Errorf("failed to get diffs: %w", err)
+			return nil, fmt.Errorf("failed to get diffs: %w", err)
 		}
 
 		var diffScore int
@@ -230,9 +158,25 @@ func addDiffScore(gitlabClient *GitLabClient, todos []ToDo, priorityFileExt []st
 		if diffScore > 50 {
 			diffScore = 50
 		}
-		todos[i].Score += float64(diffScore)
+		result[t.Target.IID] = float64(diffScore)
 	}
-	return nil
+	return result, nil
+}
+
+func mergeScore(scores ...map[int]float64) map[int]float64 {
+	result := make(map[int]float64)
+	for _, score := range scores {
+		for k, v := range score {
+			result[k] += v
+		}
+	}
+	return result
+}
+
+func setScore(todos []ToDo, scoreMap map[int]float64) {
+	for i, t := range todos {
+		todos[i].Score = scoreMap[t.Target.IID]
+	}
 }
 
 func sortByScore(todos []ToDo) {
@@ -255,6 +199,9 @@ func main() {
 		log.Fatal("GITLAB_TOKEN is not set")
 	}
 
+	b := flag.Bool("debug", false, "debug flag")
+	flag.Parse()
+
 	g := NewGitLabClient(host, token)
 
 	todos, err := g.todos()
@@ -264,20 +211,29 @@ func main() {
 
 	todos = rmDraft(todos)
 	todos = onlyOpenState(todos)
-	addUserNamePosScore(todos, user)
-	addUrgentScore(todos)
-	addCreatedAtScore(todos)
 
-	err = addDiffScore(g, todos, []string{".go", ".tf", ".py"}) // TODO: configurable
+	urgentScoreMap := urgentScore(todos)
+	userNamePosScoreMap := userNamePosScore(todos, user)
+	createdAtScoreMap := createdAtScore(todos)
+	diffScoreMap, err := diffScore(g, todos, []string{".go", ".tf", ".py"}) // TODO: configurable
+	if err != nil {
+		log.Fatal(err)
+	}
+	commitScoreMap, err := commitScore(g, user, todos)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	err = addCommitScore(g, user, todos)
-	if err != nil {
-		log.Fatal(err)
+	if *b {
+		fmt.Println("urgentScore", urgentScoreMap)
+		fmt.Println("userNamePosScore", userNamePosScoreMap)
+		fmt.Println("createdAtScore", createdAtScoreMap)
+		fmt.Println("diffScore", diffScoreMap)
+		fmt.Println("commitScore", commitScoreMap)
 	}
 
+	scoreMap := mergeScore(urgentScoreMap, userNamePosScoreMap, createdAtScoreMap, diffScoreMap, commitScoreMap)
+	setScore(todos, scoreMap)
 	sortByScore(todos)
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 1, 1, ' ', tabwriter.TabIndent)
