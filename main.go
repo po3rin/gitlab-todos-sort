@@ -131,7 +131,9 @@ func commitScore(gitlabClient *GitLabClient, userName string, todos []ToDo) (map
 			}
 
 			commitsNum := float64(len(commits))
+
 			score = 100 * commitiByUserNum / commitsNum
+			ProjectScoreMap[t.Project.ID] = score
 		}
 		result[t.Target.IID] = score
 	}
