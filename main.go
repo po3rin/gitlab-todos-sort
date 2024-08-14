@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"math"
@@ -198,6 +199,9 @@ func main() {
 		log.Fatal("GITLAB_TOKEN is not set")
 	}
 
+	b := flag.Bool("debug", false, "debug flag")
+	flag.Parse()
+
 	g := NewGitLabClient(host, token)
 
 	todos, err := g.todos()
@@ -218,6 +222,14 @@ func main() {
 	commitScoreMap, err := commitScore(g, user, todos)
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	if *b {
+		fmt.Println("urgentScore", urgentScoreMap)
+		fmt.Println("userNamePosScore", userNamePosScoreMap)
+		fmt.Println("createdAtScore", createdAtScoreMap)
+		fmt.Println("diffScore", diffScoreMap)
+		fmt.Println("commitScore", commitScoreMap)
 	}
 
 	scoreMap := mergeScore(urgentScoreMap, userNamePosScoreMap, createdAtScoreMap, diffScoreMap, commitScoreMap)
